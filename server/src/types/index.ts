@@ -124,6 +124,7 @@ export interface AnnouncementEntity {
   creator_name?: string;
   creator_avatar?: string;
   meet_link?: string | null;
+  materials?: any[] | null;
   created_at: string;
   updated_at: string;
 }

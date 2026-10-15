@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Send, 
   Video, 
@@ -7,10 +7,16 @@ import {
   RefreshCw, 
   MessageSquare, 
   Calendar,
-  AlertCircle
+  AlertCircle,
+  FileCode,
+  X
 } from 'lucide-react';
-import { fetchAnnouncements, createAnnouncement } from '../services/announcement.service';
-import type { AnnouncementItem } from '../types';
+import { 
+  fetchAnnouncements, 
+  createAnnouncement, 
+  uploadAnnouncementMaterial 
+} from '../services/announcement.service';
+import type { AnnouncementItem, AnnouncementMaterial } from '../types';
 
 interface AnnouncementStreamProps {
   courseId: string;
@@ -31,8 +37,11 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [isComposing, setIsComposing] = useState<boolean>(false);
   const [newText, setNewText] = useState<string>('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load danh sách thông báo
   const loadData = async (isManualRefresh = false) => {
@@ -56,21 +65,60 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
     }
   }, [courseId]);
 
+  // Xử lý chọn tệp HTML
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext !== 'html' && ext !== 'htm') {
+      setFeedback({
+        type: 'error',
+        text: 'Chỉ chấp nhận tệp học liệu định dạng HTML (.html, .htm).',
+      });
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setFeedback({
+        type: 'error',
+        text: 'Dung lượng tệp vượt quá 10MB.',
+      });
+      return;
+    }
+
+    setSelectedFile(file);
+    setFeedback(null);
+  };
+
   // Xử lý đăng thông báo mới
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newText.trim()) return;
+    if (!newText.trim() && !selectedFile) return;
 
     setSubmitting(true);
     setFeedback(null);
     try {
-      const created = await createAnnouncement(courseId, newText);
+      let uploadedMaterials: AnnouncementMaterial[] = [];
+
+      // 1. Tải lên tệp HTML nếu có
+      if (selectedFile) {
+        const uploaded = await uploadAnnouncementMaterial(courseId, selectedFile);
+        uploadedMaterials.push(uploaded);
+      }
+
+      // 2. Tạo bài đăng thông báo kèm học liệu
+      const textToPost = newText.trim() || 'Học liệu tương tác mới đính kèm:';
+      const created = await createAnnouncement(courseId, textToPost, uploadedMaterials);
+
       setAnnouncements((prev) => [created, ...prev]);
       setNewText('');
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setIsComposing(false);
       setFeedback({
         type: 'success',
-        text: 'Đã đăng thông báo thành công và đồng bộ lên Google Classroom!',
+        text: 'Đã đăng thông báo kèm học liệu tương tác thành công!',
       });
       setTimeout(() => setFeedback(null), 4000);
     } catch (err: any) {
@@ -105,6 +153,14 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
     }
   };
 
+  // Format dung lượng tệp
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   return (
     <div className="space-y-5">
       {/* Thanh tiêu đề Bảng tin & Nút làm mới */}
@@ -120,7 +176,7 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
           type="button"
           onClick={() => loadData(true)}
           disabled={refreshing || loading}
-          className="text-xs text-[#16382B] hover:text-[#0f271e] font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-[#EAF2EC] transition-colors"
+          className="text-xs text-[#16382B] hover:text-[#0f271e] font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-[#EAF2EC] transition-colors cursor-pointer"
           title="Làm mới bảng tin"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
@@ -156,7 +212,7 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
                 className="w-9 h-9 rounded-full border border-[#cbd8cf] object-cover shrink-0"
               />
               <span className="text-xs text-[#7B8B84] font-medium flex-1">
-                Thông báo nội dung nào đó cho lớp học của bạn hoặc chia sẻ link Google Meet...
+                Thông báo nội dung bài học, chia sẻ Google Meet hoặc đính kèm học liệu HTML tương tác...
               </span>
               <span className="text-xs font-bold text-[#16382B] bg-[#EAF2EC] px-3 py-1.5 rounded-xl border border-[#D6E6DC]">
                 Đăng bài
@@ -172,29 +228,81 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
                 />
                 <div>
                   <div className="text-xs font-bold text-[#15241E]">{currentUser?.full_name || 'Giảng viên'}</div>
-                  <div className="text-[10px] text-[#61746B]">Đăng công khai lên Google Classroom</div>
+                  <div className="text-[10px] text-[#61746B]">Đăng công khai lên Google Classroom & Bảng tin</div>
                 </div>
               </div>
 
               <textarea
                 value={newText}
                 onChange={(e) => setNewText(e.target.value)}
-                placeholder="Nhập nội dung thông báo cho học sinh... Dán link Google Meet (ví dụ https://meet.google.com/abc-defg-hij) để tự động tạo phòng họp trực tuyến!"
+                placeholder="Nhập nội dung thông báo cho học sinh... Dán link Google Meet hoặc đính kèm bài học HTML tương tác bên dưới!"
                 rows={4}
                 className="w-full text-xs text-[#15241E] placeholder-[#7B8B84] bg-[#FBFBFA] p-3.5 rounded-2xl border border-[#CBD8CF] focus:outline-none focus:ring-2 focus:ring-[#16382B]/20 focus:border-[#16382B] transition-all leading-relaxed"
                 autoFocus
               />
 
+              {/* Input file ẩn cho HTML */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept=".html,.htm"
+                className="hidden"
+              />
+
+              {/* Preview tệp HTML đã chọn */}
+              {selectedFile && (
+                <div className="p-3 rounded-2xl bg-[#F8FAF8] border border-[#CBD8CF] flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-[#EAF2EC] text-[#16382B] flex items-center justify-center shrink-0 border border-[#D6E6DC]">
+                      <FileCode className="w-4 h-4 text-[#16382B]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-[#15241E] truncate">{selectedFile.name}</div>
+                      <div className="text-[10px] text-[#7B8B84]">
+                        Học liệu tương tác · {formatFileSize(selectedFile.size)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="p-1 rounded-lg text-[#7B8B84] hover:text-[#DC2626] hover:bg-[#FEE2E2] transition-colors cursor-pointer"
+                    title="Gỡ bỏ tệp"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                {/* Nút tiện ích thêm Meet */}
-                <button
-                  type="button"
-                  onClick={handleInsertMeetSnippet}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#EAF2EC] text-[#16382B] text-xs font-semibold hover:bg-[#d8e7dc] transition-colors border border-[#cbd8cf]"
-                >
-                  <Video className="w-3.5 h-3.5 text-[#16382B]" />
-                  <span>Chèn link Google Meet</span>
-                </button>
+                {/* Các nút công cụ đính kèm */}
+                <div className="flex items-center gap-2">
+                  {/* Nút đính kèm tệp HTML học liệu */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#FFF8ED] text-[#B45309] text-xs font-bold hover:bg-[#ffedd5] transition-colors border border-[#FDE68A] cursor-pointer"
+                    title="Đính kèm tệp HTML ôn tập bài học tương tác"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#D97706]" />
+                    <span>Đính kèm học liệu HTML</span>
+                  </button>
+
+                  {/* Nút tiện ích thêm Meet */}
+                  <button
+                    type="button"
+                    onClick={handleInsertMeetSnippet}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#EAF2EC] text-[#16382B] text-xs font-semibold hover:bg-[#d8e7dc] transition-colors border border-[#cbd8cf] cursor-pointer"
+                  >
+                    <Video className="w-3.5 h-3.5 text-[#16382B]" />
+                    <span>Chèn link Google Meet</span>
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-2">
                   <button
@@ -202,17 +310,19 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
                     onClick={() => {
                       setIsComposing(false);
                       setNewText('');
+                      setSelectedFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
                     }}
                     disabled={submitting}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold text-[#61746B] hover:bg-[#F0F4F1] transition-colors"
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-[#61746B] hover:bg-[#F0F4F1] transition-colors cursor-pointer"
                   >
                     Hủy
                   </button>
 
                   <button
                     type="submit"
-                    disabled={submitting || !newText.trim()}
-                    className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#16382B] text-white text-xs font-bold hover:bg-[#0f271e] disabled:opacity-50 transition-all shadow-sm"
+                    disabled={submitting || (!newText.trim() && !selectedFile)}
+                    className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#16382B] text-white text-xs font-bold hover:bg-[#0f271e] disabled:opacity-50 transition-all shadow-sm cursor-pointer"
                   >
                     {submitting ? (
                       <>
@@ -257,7 +367,7 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
           </div>
           <h4 className="text-sm font-bold text-[#15241E]">Chưa có thông báo nào</h4>
           <p className="text-xs text-[#7B8B84] max-w-sm mx-auto leading-relaxed">
-            Các bài đăng và thông báo kèm link phòng học Google Meet từ Google Classroom sẽ xuất hiện ở đây.
+            Các bài đăng và thông báo kèm học liệu tương tác hoặc phòng học Google Meet sẽ xuất hiện ở đây.
           </p>
         </div>
       ) : (
@@ -292,9 +402,58 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
               </div>
 
               {/* Nội dung thông báo */}
-              <div className="text-xs text-[#15241E] leading-relaxed whitespace-pre-line font-normal">
-                {item.text}
-              </div>
+              {item.text && (
+                <div className="text-xs text-[#15241E] leading-relaxed whitespace-pre-line font-normal">
+                  {item.text}
+                </div>
+              )}
+
+              {/* 🎯 THẺ HỌC LIỆU HTML TƯƠNG TÁC ĐÍNH KÈM */}
+              {item.materials && item.materials.length > 0 && (
+                <div className="space-y-2.5 pt-1">
+                  {item.materials.map((mat, idx) => (
+                    <div
+                      key={idx}
+                      className="p-4 rounded-2xl bg-gradient-to-r from-[#FFFBF2] to-[#FFF5E6] border border-[#FDE68A] shadow-2xs hover:shadow-sm transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className="w-11 h-11 rounded-2xl bg-[#FEF3C7] text-[#D97706] flex items-center justify-center shrink-0 border border-[#FCD34D]">
+                          <FileCode className="w-5 h-5 text-[#D97706]" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider text-[#92400E] bg-[#FEF3C7] px-2 py-0.5 rounded-md border border-[#FDE68A]">
+                              <Sparkles className="w-3 h-3 text-[#D97706]" />
+                              Học liệu tương tác
+                            </span>
+                            {mat.size ? (
+                              <span className="text-[10px] text-[#7B8B84]">
+                                {formatFileSize(mat.size)}
+                              </span>
+                            ) : null}
+                          </div>
+                          <h5 className="text-xs font-bold text-[#15241E] truncate mt-1">
+                            {mat.title || 'Bài học ôn tập tương tác'}
+                          </h5>
+                          <p className="text-[11px] text-[#61746B] mt-0.5">
+                            Mở bài học để xem mô phỏng 3D, ghép danh pháp và làm bài tập trắc nghiệm.
+                          </p>
+                        </div>
+                      </div>
+
+                      <a
+                        href={mat.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold transition-all shadow-sm shrink-0 cursor-pointer"
+                      >
+                        <span>Mở bài học tương tác</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* 🎯 BANNER CUỘC HỌP GOOGLE MEET NỔI BẬT */}
               {item.meet_link && (
@@ -320,7 +479,7 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
                     href={item.meet_link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#16382B] hover:bg-[#0f271e] text-white text-xs font-bold transition-all shadow-sm shrink-0"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#16382B] hover:bg-[#0f271e] text-white text-xs font-bold transition-all shadow-sm shrink-0 cursor-pointer"
                   >
                     <span>Tham gia cuộc họp ngay</span>
                     <ExternalLink className="w-3.5 h-3.5" />

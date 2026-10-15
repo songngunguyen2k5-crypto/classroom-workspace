@@ -37,11 +37,13 @@ export const getCourseAnnouncements = async (courseId: string): Promise<Announce
 
 /**
  * 2. Giảng viên đăng thông báo mới cho lớp học (Đẩy lên Google Classroom + Lưu DB Local)
+ * Hỗ trợ đính kèm tệp học liệu HTML hoặc tệp tin khác
  */
 export const createCourseAnnouncement = async (
   courseId: string,
   userId: string,
-  text: string
+  text: string,
+  materials: any[] = []
 ): Promise<AnnouncementEntity> => {
   if (!text || text.trim().length === 0) {
     throw new AppError('Nội dung thông báo không được để trống.', 400);
@@ -66,17 +68,34 @@ export const createCourseAnnouncement = async (
 
   const classroom = await getClassroomClientForUser(userId);
 
-  // 2. Gọi Google Classroom API để tạo bài đăng thông báo
+  // 2. Chuyển đổi materials sang định dạng của Google Classroom API (Link items)
+  const classroomMaterials = (materials || []).map((m: any) => {
+    if (m.url) {
+      return {
+        link: {
+          url: m.url,
+          title: m.title || 'Học liệu tương tác',
+        },
+      };
+    }
+    return null;
+  }).filter(Boolean);
+
   let googleAnnouncementId: string = `local_${Date.now()}`;
   let creationTime = new Date().toISOString();
 
   try {
+    const requestBody: any = {
+      text: text.trim(),
+      state: 'PUBLISHED',
+    };
+    if (classroomMaterials.length > 0) {
+      requestBody.materials = classroomMaterials;
+    }
+
     const { data: created } = await classroom.courses.announcements.create({
       courseId: course.google_course_id,
-      requestBody: {
-        text: text.trim(),
-        state: 'PUBLISHED',
-      },
+      requestBody,
     });
 
     if (created && created.id) {
@@ -91,13 +110,14 @@ export const createCourseAnnouncement = async (
   // 3. Trích xuất link Google Meet (nếu có)
   const meetLink = extractMeetLinkFromText(text);
 
-  const announcementPayload = {
+  const announcementPayload: any = {
     google_announcement_id: googleAnnouncementId,
     course_id: course.id,
     text: text.trim(),
     creator_name: user?.full_name || 'Giảng viên',
     creator_avatar: user?.avatar_url || null,
     meet_link: meetLink,
+    materials: materials && materials.length > 0 ? materials : null,
     created_at: creationTime,
     updated_at: creationTime,
   };

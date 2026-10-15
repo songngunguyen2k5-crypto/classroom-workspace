@@ -76,6 +76,13 @@ export interface Submission {
   updated_at: string;
 }
 
+export interface AnnouncementMaterial {
+  type: 'HTML_FILE' | 'FILE' | 'LINK';
+  title: string;
+  url: string;
+  size?: number;
+}
+
 export interface AnnouncementItem {
   id: string;
   course_id: string;
@@ -84,6 +91,7 @@ export interface AnnouncementItem {
   creator_name?: string;
   creator_avatar?: string;
   meet_link?: string | null;
+  materials?: AnnouncementMaterial[] | null;
   created_at: string;
   updated_at: string;
 }
