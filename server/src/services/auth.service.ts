@@ -72,81 +72,82 @@ export const getGoogleProfile = async (accessToken: string): Promise<GoogleProfi
 
 /**
  * Bước 3: Xác định Role người dùng (TEACHER / STUDENT)
- * Ưu tiên kiểm tra quan hệ trong CSDL hệ thống và số lượng lớp học sinh tham gia
+ * Nguyên tắc:
+ * 1. Nếu tài khoản có bất kỳ lớp học nào với vai trò Giảng viên (teacherId: 'me') trên Google Classroom -> TEACHER
+ * 2. Nếu tài khoản là chủ sở hữu (owner_id) hoặc là Giảng viên trong bất kỳ lớp nào của hệ thống -> TEACHER
+ * 3. Nếu trong DB đã được thiết lập là TEACHER -> Giữ nguyên TEACHER
+ * 4. Ngược lại -> STUDENT
  */
 export const determineUserRole = async (
   accessToken: string,
   googleId?: string
 ): Promise<UserRole> => {
   try {
-    // 1. Kiểm tra trong DB: Nếu user đã tồn tại và đã là STUDENT, giữ nguyên vai trò
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({ access_token: accessToken });
+    const classroom = google.classroom({ version: 'v1', auth: oauth2Client });
+
+    // 1. Kiểm tra trên Google Classroom: Có lớp nào người dùng là Giảng viên không?
+    const teacherRes = await classroom.courses.list({
+      teacherId: 'me',
+      courseStates: ['ACTIVE', 'PROVISIONED'],
+    }).catch((err) => {
+      console.warn('[AuthService] Lỗi gọi Google Classroom teacher list:', err.message);
+      return { data: { courses: [] } };
+    });
+
+    const teacherCourses = teacherRes.data.courses || [];
+    if (teacherCourses.length > 0) {
+      console.log(`[AuthService] ✅ Phát hiện ${teacherCourses.length} lớp giảng dạy trên Google Classroom -> Vai trò: TEACHER`);
+      return 'TEACHER';
+    }
+
+    // 2. Kiểm tra trong CSDL Supabase: Có phải là chủ sở hữu hoặc giảng viên lớp nào không?
     if (googleId) {
-      const { data: existingUser } = await supabaseAdmin
+      const { data: userRecord } = await supabaseAdmin
         .from('users')
         .select('id, role')
         .eq('google_id', googleId)
         .single();
 
-      if (existingUser) {
-        if (existingUser.role === 'STUDENT') {
-          return 'STUDENT';
+      if (userRecord) {
+        // Kiểm tra xem user có sở hữu lớp nào không
+        const { data: ownedCourses } = await supabaseAdmin
+          .from('courses')
+          .select('id')
+          .eq('owner_id', userRecord.id)
+          .limit(1);
+
+        if (ownedCourses && ownedCourses.length > 0) {
+          console.log('[AuthService] ✅ Người dùng là chủ sở hữu lớp trong DB -> Vai trò: TEACHER');
+          return 'TEACHER';
         }
 
-        // Kiểm tra xem user có phải là STUDENT trong các lớp học thuộc hệ thống
-        const { data: memberRecord } = await supabaseAdmin
+        // Kiểm tra xem user có vai trò TEACHER trong bảng thành viên lớp không
+        const { data: teachingMembers } = await supabaseAdmin
           .from('course_members')
-          .select('role_in_course')
-          .eq('user_id', existingUser.id);
+          .select('id')
+          .eq('user_id', userRecord.id)
+          .eq('role_in_course', 'TEACHER')
+          .limit(1);
 
-        const isStudentInCourses = (memberRecord || []).some(
-          (m) => m.role_in_course === 'STUDENT'
-        );
-        const isTeacherInCourses = (memberRecord || []).some(
-          (m) => m.role_in_course === 'TEACHER'
-        );
+        if (teachingMembers && teachingMembers.length > 0) {
+          console.log('[AuthService] ✅ Người dùng là TEACHER trong thành viên lớp -> Vai trò: TEACHER');
+          return 'TEACHER';
+        }
 
-        if (isStudentInCourses && !isTeacherInCourses) {
-          return 'STUDENT';
+        // Nếu admin hoặc hệ thống đã cấp quyền TEACHER trước đó
+        if (userRecord.role === 'TEACHER') {
+          return 'TEACHER';
         }
       }
     }
 
-    const oauth2Client = createOAuth2Client();
-    oauth2Client.setCredentials({ access_token: accessToken });
-    const classroom = google.classroom({ version: 'v1', auth: oauth2Client });
-
-    // 2. Lấy danh sách lớp tham gia với vai trò học sinh và giảng viên trên Google Classroom
-    const [teacherRes, studentRes] = await Promise.all([
-      classroom.courses.list({ teacherId: 'me', courseStates: ['ACTIVE'] }).catch(() => ({ data: { courses: [] } })),
-      classroom.courses.list({ studentId: 'me', courseStates: ['ACTIVE'] }).catch(() => ({ data: { courses: [] } })),
-    ]);
-
-    const teacherCourses = teacherRes.data.courses || [];
-    const studentCourses = studentRes.data.courses || [];
-
-    // Lấy danh sách ID lớp học của hệ thống
-    const { data: systemCourses } = await supabaseAdmin
-      .from('courses')
-      .select('google_course_id');
-    const systemGoogleIds = new Set((systemCourses || []).map((c) => c.google_course_id));
-
-    // Nếu người dùng đang là học sinh trong bất kỳ lớp học nào của hệ thống -> Vai trò là STUDENT
-    const isEnrolledInSystemCourse = studentCourses.some((sc) =>
-      systemGoogleIds.has(sc.id || '')
-    );
-    if (isEnrolledInSystemCourse) {
-      return 'STUDENT';
-    }
-
-    // Nếu số lớp học sinh tham gia nhiều hơn lớp dạy -> Vai trò là STUDENT
-    if (studentCourses.length > teacherCourses.length) {
-      return 'STUDENT';
-    }
-
-    // Mặc định: Nếu có sở hữu lớp dạy hợp lệ thì là TEACHER, ngược lại là STUDENT
-    return teacherCourses.length > 0 ? 'TEACHER' : 'STUDENT';
-  } catch (error) {
-    console.warn('[AuthService] Không xác định được role qua Classroom API, mặc định là STUDENT:', error);
+    // Mặc định: Nếu không giảng dạy lớp nào -> Vai trò là STUDENT
+    console.log('[AuthService] ℹ️ Không phát hiện lớp giảng dạy -> Vai trò: STUDENT');
+    return 'STUDENT';
+  } catch (error: any) {
+    console.warn('[AuthService] Lỗi khi xác định role qua Classroom API, mặc định là STUDENT:', error.message);
     return 'STUDENT';
   }
 };
@@ -154,6 +155,7 @@ export const determineUserRole = async (
 /**
  * Bước 4 & 5: Tạo hoặc cập nhật user trong Supabase DB (Upsert pattern)
  * Mã hóa Refresh Token bằng AES-256 trước khi lưu
+ * Tự động nâng cấp tài khoản lên TEACHER nếu phát hiện quyền giảng dạy mới
  */
 export const upsertUser = async (
   profile: GoogleProfile,
@@ -169,8 +171,8 @@ export const upsertUser = async (
     .eq('google_id', profile.googleId)
     .single();
 
-  // Bảo toàn vai trò STUDENT nếu tài khoản đã là học sinh trong hệ thống
-  const finalRole = existing?.role === 'STUDENT' ? 'STUDENT' : (existing?.role || role);
+  // Nâng cấp linh hoạt: Nếu lần đăng nhập này là TEACHER hoặc trong DB đã là TEACHER -> Đều là TEACHER
+  const finalRole: UserRole = (role === 'TEACHER' || existing?.role === 'TEACHER') ? 'TEACHER' : 'STUDENT';
 
   const { data, error } = await supabaseAdmin
     .from('users')
