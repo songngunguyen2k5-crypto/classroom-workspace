@@ -6,6 +6,7 @@ import {
 import { uploadMaterialFile } from '../services/material.service.js';
 import { getCourseUserRole } from '../services/coursework.service.js';
 import { AppError } from '../middlewares/errorHandler.js';
+import { ENV } from '../config/env.js';
 import type { ApiResponse } from '../types/index.js';
 
 /**
@@ -99,4 +100,45 @@ export const uploadMaterialController = async (
     next(error);
   }
 };
+
+/**
+ * GET /api/materials/view?url=...
+ * Proxy mở tệp học liệu HTML với Content-Type text/html chuẩn
+ */
+export const viewMaterialController = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { url } = req.query;
+    if (!url || typeof url !== 'string') {
+      throw new AppError('URL tệp học liệu không hợp lệ.', 400);
+    }
+
+    // Kiểm tra an toàn: chỉ nhận URL từ Supabase Storage của hệ thống
+    const isAllowed =
+      url.includes('supabase.co/storage') ||
+      (ENV.SUPABASE_URL && url.includes(ENV.SUPABASE_URL));
+
+    if (!isAllowed) {
+      throw new AppError('Nguồn tài liệu không thuộc hệ thống lưu trữ được phép.', 403);
+    }
+
+    const fileRes = await fetch(url);
+    if (!fileRes.ok) {
+      throw new AppError('Không thể tải tệp từ kho lưu trữ đám mây.', fileRes.status);
+    }
+
+    const htmlContent = await fileRes.text();
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.status(200).send(htmlContent);
+  } catch (error) {
+    next(error);
+  }
+};
+
 

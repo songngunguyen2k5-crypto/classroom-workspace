@@ -154,11 +154,12 @@ CREATE TABLE IF NOT EXISTS announcements (
     creator_name VARCHAR(255),
     creator_avatar TEXT,
     meet_link TEXT, -- Tự động bóc tách link Google Meet nếu có
+    materials JSONB DEFAULT '[]'::jsonb, -- Danh sách tệp học liệu HTML tương tác đính kèm
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE announcements IS 'Danh sách bài đăng thông báo trên Bảng tin lớp học (hỗ trợ link Google Meet)';
+COMMENT ON TABLE announcements IS 'Danh sách bài đăng thông báo trên Bảng tin lớp học (hỗ trợ link Google Meet và học liệu HTML tương tác)';
 
 -- ==============================================================================
 -- 3. CHỈ MỤC TỐI ƯU TRUY VẤN (INDEXES)

@@ -4,6 +4,7 @@ import {
   listAnnouncements,
   postAnnouncement,
   uploadMaterialController,
+  viewMaterialController,
 } from '../controllers/announcement.controller.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.middleware.js';
 
@@ -16,6 +17,9 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // Giới hạn tối đa 10MB
   },
 });
+
+// 🎯 Endpoint xem học liệu HTML tương tác trực tiếp (Public proxy để trả Content-Type text/html)
+router.get('/materials/view', viewMaterialController);
 
 router.use(authMiddleware);
 

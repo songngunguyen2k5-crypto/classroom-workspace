@@ -38,6 +38,7 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
   const [isComposing, setIsComposing] = useState<boolean>(false);
   const [newText, setNewText] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [openingUrl, setOpeningUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -159,6 +160,99 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  // 🎯 Mở học liệu tương tác với MIME type text/html chuẩn qua Blob hoặc Backend Proxy
+  const handleOpenInteractiveLesson = async (url: string, title?: string) => {
+    // 1. Mở ngay tab mới hiển thị màn hình chờ tải để tránh popup blocker của trình duyệt
+    const newTab = window.open('about:blank', '_blank');
+    if (newTab) {
+      try {
+        newTab.document.write(`
+          <!DOCTYPE html>
+          <html lang="vi">
+            <head>
+              <meta charset="utf-8">
+              <title>${title || 'Đang mở bài học tương tác...'}</title>
+              <style>
+                body {
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  height: 100vh;
+                  margin: 0;
+                  background: #FDFBF7;
+                  color: #15241E;
+                }
+                .card {
+                  text-align: center;
+                  padding: 36px 30px;
+                  border-radius: 24px;
+                  background: #FFFFFF;
+                  border: 1px solid #E5ECE7;
+                  box-shadow: 0 12px 30px rgba(22, 56, 43, 0.08);
+                  max-width: 440px;
+                  width: 90%;
+                }
+                .spinner {
+                  width: 40px;
+                  height: 40px;
+                  border: 3.5px solid #F3F4F6;
+                  border-top-color: #D97706;
+                  border-radius: 50%;
+                  animation: spin 0.9s cubic-bezier(0.6, 0.2, 0.4, 0.8) infinite;
+                  margin: 0 auto 18px;
+                }
+                @keyframes spin { to { transform: rotate(360deg); } }
+                h3 { margin: 0 0 8px; font-size: 17px; font-weight: 700; color: #15241E; }
+                p { margin: 0; font-size: 13px; color: #61746B; line-height: 1.5; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="spinner"></div>
+                <h3>Đang tải không gian học tương tác...</h3>
+                <p>Hệ thống đang chuẩn bị mô phỏng 3D và bài tập tương tác cho em. Trang sẽ tự động mở trong giây lát!</p>
+              </div>
+            </body>
+          </html>
+        `);
+      } catch (e) {
+        console.warn('Could not write loading screen to new tab:', e);
+      }
+    }
+
+    setOpeningUrl(url);
+
+    try {
+      // 2. Fetch nội dung HTML từ URL
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const htmlText = await res.text();
+
+      // 3. Đóng gói thành Blob với Content-Type text/html; charset=utf-8
+      const blob = new Blob([htmlText], { type: 'text/html; charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+
+      if (newTab) {
+        newTab.location.href = blobUrl;
+      } else {
+        window.open(blobUrl, '_blank');
+      }
+    } catch (err) {
+      console.warn('Direct blob fetch failed, falling back to backend view endpoint:', err);
+      // Fallback sang endpoint backend proxy
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+      const proxyUrl = `${apiBase}/materials/view?url=${encodeURIComponent(url)}`;
+      if (newTab) {
+        newTab.location.href = proxyUrl;
+      } else {
+        window.open(proxyUrl, '_blank');
+      }
+    } finally {
+      setOpeningUrl(null);
+    }
   };
 
   return (
@@ -441,15 +535,24 @@ export const AnnouncementStream: React.FC<AnnouncementStreamProps> = ({
                         </div>
                       </div>
 
-                      <a
-                        href={mat.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold transition-all shadow-sm shrink-0 cursor-pointer"
+                      <button
+                        type="button"
+                        onClick={() => handleOpenInteractiveLesson(mat.url, mat.title)}
+                        disabled={openingUrl === mat.url}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold transition-all shadow-sm shrink-0 cursor-pointer disabled:opacity-60"
                       >
-                        <span>Mở bài học tương tác</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+                        {openingUrl === mat.url ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Đang mở bài học...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Mở bài học tương tác</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </>
+                        )}
+                      </button>
                     </div>
                   ))}
                 </div>
